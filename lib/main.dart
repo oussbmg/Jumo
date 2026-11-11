@@ -1,5 +1,6 @@
 
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -7,304 +8,161 @@ void main() => runApp(const MarkerCreatorApp());
 
 class MarkerCreatorApp extends StatelessWidget {
   const MarkerCreatorApp({super.key});
-
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Marker Creator',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
-        useMaterial3: true,
-      ),
-      home: const MarkerCreatorPage(),
-    );
-  }
+  Widget build(BuildContext context) => MaterialApp(
+    debugShowCheckedModeBanner: false,
+    title: 'Marker Creator',
+    theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.green), useMaterial3: true),
+    home: const MarkerCreatorPage(),
+  );
 }
 
 class Piece {
-  String name;
-  double widthCm;
-  double heightCm;
-  double xCm;
-  double yCm;
-  double rotation;
-
-  Piece({
-    required this.name,
-    required this.widthCm,
-    required this.heightCm,
-    this.xCm = 0,
-    this.yCm = 0,
-    this.rotation = 0,
-  });
-
-  double get areaM2 => (widthCm * heightCm) / 10000;
+  Piece({required this.name, required this.points, this.quantity=1});
+  String name; List<Offset> points; int quantity;
+  double get areaCm2 {
+    if (points.length < 3) return 0;
+    double s=0;
+    for (int i=0;i<points.length;i++) {
+      final a=points[i], b=points[(i+1)%points.length];
+      s += a.dx*b.dy-b.dx*a.dy;
+    }
+    return s.abs()/2;
+  }
+  double get areaM2 => areaCm2/10000;
 }
 
 class MarkerCreatorPage extends StatefulWidget {
   const MarkerCreatorPage({super.key});
-
-  @override
-  State<MarkerCreatorPage> createState() => _MarkerCreatorPageState();
+  @override State<MarkerCreatorPage> createState()=>_MarkerCreatorPageState();
 }
 
 class _MarkerCreatorPageState extends State<MarkerCreatorPage> {
-  final pieces = <Piece>[];
-  double fabricWidth = 160;
-  double markerLength = 250;
-  double fabricPrice = 800;
-  String? imageName;
+  double fabricWidth=160, markerLength=250, fabricPrice=800;
+  Uint8List? image;
+  final pieces=<Piece>[];
+  final drawing=<Offset>[];
+  bool isDrawing=false;
 
-  double get markerArea => fabricWidth * markerLength / 10000;
-  double get piecesArea => pieces.fold(0, (s, p) => s + p.areaM2);
-  double get efficiency =>
-      markerArea == 0 ? 0 : (piecesArea / markerArea) * 100;
-  double get waste => math.max(0, 100 - efficiency);
-  double get markerFabricCost => markerLength / 100 * fabricPrice;
+  double get markerArea=>fabricWidth*markerLength/10000;
+  double get piecesArea=>pieces.fold(0,(s,p)=>s+p.areaM2*p.quantity);
+  double get efficiency=>markerArea==0?0:(piecesArea/markerArea)*100;
+  double get waste=>math.max(0,100-efficiency);
+  double get fabricCost=>markerLength/100*fabricPrice;
 
-  Future<void> addPiece() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (_) => const _PieceDialog(),
-    );
-    if (result == null) return;
+  Future<void> pickImage() async {
+    final r=await FilePicker.platform.pickFiles(type:FileType.image,withData:true);
+    if(r?.files.single.bytes!=null) setState(()=>image=r!.files.single.bytes);
+  }
+
+  void startDraw()=>setState(()=>{isDrawing=true,drawing.clear()});
+  void cancelDraw()=>setState(()=>{isDrawing=false,drawing.clear()});
+
+  void addPoint(Offset px,double scale) {
+    if(!isDrawing)return;
+    setState(()=>drawing.add(Offset(
+      (px.dx/scale).clamp(0,fabricWidth),
+      (px.dy/scale).clamp(0,markerLength),
+    )));
+  }
+
+  Future<void> finishDraw() async {
+    if(drawing.length<3){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('حدد 3 نقاط على الأقل')));return;}
+    final r=await showDialog<Map<String,dynamic>>(context:context,builder:(_)=>const PieceDialog());
+    if(r==null)return;
     setState(() {
-      pieces.add(Piece(
-        name: result['name'],
-        widthCm: result['width'],
-        heightCm: result['height'],
-        xCm: 5,
-        yCm: 5,
-      ));
+      pieces.add(Piece(name:r['name'],points:List.of(drawing),quantity:r['quantity']));
+      drawing.clear(); isDrawing=false;
     });
   }
 
-  Future<void> editPiece(int index) async {
-    final p = pieces[index];
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (_) => _PieceDialog(
-        initialName: p.name,
-        initialWidth: p.widthCm,
-        initialHeight: p.heightCm,
-      ),
-    );
-    if (result == null) return;
-    setState(() {
-      p.name = result['name'];
-      p.widthCm = result['width'];
-      p.heightCm = result['height'];
-    });
-  }
+  @override Widget build(BuildContext context)=>Scaffold(
+    appBar:AppBar(title:const Text('Marker Creator'),actions:[IconButton(onPressed:pickImage,icon:const Icon(Icons.image))]),
+    body:Column(children:[settings(),Expanded(child:editor()),pieceList(),stats()]),
+  );
 
-  Future<void> importMarkerImage() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      withData: false,
-    );
-    if (result != null) {
-      setState(() => imageName = result.files.single.name);
-    }
-  }
+  Widget field(String label,double v,ValueChanged<double> onChanged)=>SizedBox(
+    width:145,child:TextField(
+      controller:TextEditingController(text:v.toStringAsFixed(1)),
+      keyboardType:const TextInputType.numberWithOptions(decimal:true),
+      decoration:InputDecoration(labelText:label,border:const OutlineInputBorder(),isDense:true),
+      onSubmitted:(s)=>onChanged(double.tryParse(s)??v),
+    ));
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Marker Creator'),
-        actions: [
-          IconButton(
-            tooltip: 'Importer une image du marker',
-            onPressed: importMarkerImage,
-            icon: const Icon(Icons.image_outlined),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          _topForm(),
-          Expanded(child: _markerEditor()),
-          _bottomStats(),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: addPiece,
-        icon: const Icon(Icons.add),
-        label: const Text('Ajouter pièce'),
-      ),
-    );
-  }
+  Widget settings()=>Padding(
+    padding:const EdgeInsets.all(8),child:Wrap(spacing:8,runSpacing:8,children:[
+      field('عرض القماش cm',fabricWidth,(v)=>setState(()=>fabricWidth=v)),
+      field('طول Marker cm',markerLength,(v)=>setState(()=>markerLength=v)),
+      field('السعر DA/m',fabricPrice,(v)=>setState(()=>fabricPrice=v)),
+      FilledButton.icon(onPressed:isDrawing?finishDraw:startDraw,icon:Icon(isDrawing?Icons.check:Icons.edit),label:Text(isDrawing?'Terminer':'Dessiner pièce')),
+      if(isDrawing) OutlinedButton(onPressed:cancelDraw,child:const Text('Annuler')),
+    ]));
 
-  Widget _topForm() => Padding(
-        padding: const EdgeInsets.all(12),
-        child: Wrap(
-          spacing: 12,
-          runSpacing: 8,
-          children: [
-            _numberField('Largeur tissu (cm)', fabricWidth,
-                (v) => setState(() => fabricWidth = v)),
-            _numberField('Longueur marker (cm)', markerLength,
-                (v) => setState(() => markerLength = v)),
-            _numberField('Prix tissu (DA/m)', fabricPrice,
-                (v) => setState(() => fabricPrice = v)),
-            if (imageName != null)
-              Chip(
-                avatar: const Icon(Icons.image),
-                label: Text(imageName!),
-                onDeleted: () => setState(() => imageName = null),
-              ),
-          ],
-        ),
-      );
-
-  Widget _numberField(String label, double value, ValueChanged<double> onChanged) {
-    final controller = TextEditingController(text: value.toStringAsFixed(0));
-    return SizedBox(
-      width: 190,
-      child: TextField(
-        controller: controller,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: InputDecoration(
-          labelText: label,
-          border: const OutlineInputBorder(),
-          isDense: true,
-        ),
-        onSubmitted: (s) => onChanged(double.tryParse(s) ?? value),
-      ),
-    );
-  }
-
-  Widget _markerEditor() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final scale = math.min(
-          (constraints.maxWidth - 40) / math.max(fabricWidth, 1),
-          (constraints.maxHeight - 40) / math.max(markerLength, 1),
-        ).clamp(0.5, 3.0);
-
-        return Center(
-          child: Container(
-            width: fabricWidth * scale,
-            height: markerLength * scale,
-            decoration: BoxDecoration(
-              border: Border.all(width: 2),
-              color: Colors.grey.shade100,
-            ),
-            child: Stack(
-              children: [
-                for (int i = 0; i < pieces.length; i++)
-                  _pieceWidget(i, scale),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _pieceWidget(int index, double scale) {
-    final p = pieces[index];
-    return Positioned(
-      left: p.xCm * scale,
-      top: p.yCm * scale,
-      child: GestureDetector(
-        onPanUpdate: (d) {
-          setState(() {
-            p.xCm = (p.xCm + d.delta.dx / scale)
-                .clamp(0, math.max(0, fabricWidth - p.widthCm));
-            p.yCm = (p.yCm + d.delta.dy / scale)
-                .clamp(0, math.max(0, markerLength - p.heightCm));
-          });
-        },
-        onDoubleTap: () => editPiece(index),
-        child: Transform.rotate(
-          angle: p.rotation * math.pi / 180,
-          child: Container(
-            width: p.widthCm * scale,
-            height: p.heightCm * scale,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              border: Border.all(width: 1.5),
-              color: Colors.green.withOpacity(.18),
-            ),
-            child: Text(
-              p.name,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _bottomStats() {
-    return Material(
-      elevation: 6,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Wrap(
-          spacing: 22,
-          runSpacing: 8,
-          children: [
-            Text('Marker: ${markerArea.toStringAsFixed(3)} m²'),
-            Text('Pièces: ${piecesArea.toStringAsFixed(3)} m²'),
-            Text('Rendement: ${efficiency.toStringAsFixed(1)}%'),
-            Text('Déchets: ${waste.toStringAsFixed(1)}%'),
-            Text('Tissu Marker: ${markerFabricCost.toStringAsFixed(2)} DA'),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PieceDialog extends StatefulWidget {
-  final String initialName;
-  final double initialWidth;
-  final double initialHeight;
-
-  const _PieceDialog({
-    this.initialName = 'Pièce',
-    this.initialWidth = 50,
-    this.initialHeight = 50,
+  Widget editor()=>LayoutBuilder(builder:(c,cs){
+    final scale=math.min((cs.maxWidth-20)/fabricWidth,(cs.maxHeight-20)/markerLength);
+    final w=fabricWidth*scale,h=markerLength*scale;
+    return Center(child:Container(width:w,height:h,clipBehavior:Clip.hardEdge,
+      decoration:BoxDecoration(color:Colors.grey.shade100,border:Border.all(width:2)),
+      child:Stack(children:[
+        if(image!=null)Positioned.fill(child:Image.memory(image!,fit:BoxFit.fill)),
+        Positioned.fill(child:GestureDetector(
+          onTapUp:(d)=>addPoint(d.localPosition,scale),
+          child:CustomPaint(painter:MarkerPainter(pieces,drawing,scale,isDrawing)),
+        )),
+      ])));
   });
 
-  @override
-  State<_PieceDialog> createState() => _PieceDialogState();
+  Widget pieceList()=>SizedBox(height:65,child:ListView(
+    scrollDirection:Axis.horizontal,
+    children:[for(int i=0;i<pieces.length;i++)Card(child:Row(children:[
+      Padding(padding:const EdgeInsets.all(8),child:Text('${pieces[i].name} ×${pieces[i].quantity}  ${pieces[i].areaM2.toStringAsFixed(3)} m²')),
+      IconButton(onPressed:()=>setState(()=>pieces.removeAt(i)),icon:const Icon(Icons.delete_outline))
+    ]))]));
+
+  Widget stats()=>Material(elevation:6,child:Padding(padding:const EdgeInsets.all(10),child:Wrap(spacing:16,children:[
+    Text('Marker ${markerArea.toStringAsFixed(3)} m²'),
+    Text('Pièces ${piecesArea.toStringAsFixed(3)} m²'),
+    Text('Rendement ${efficiency.toStringAsFixed(1)}%'),
+    Text('Déchets ${waste.toStringAsFixed(1)}%'),
+    Text('Tissu ${fabricCost.toStringAsFixed(2)} DA'),
+  ])));
 }
 
-class _PieceDialogState extends State<_PieceDialog> {
-  late final name = TextEditingController(text: widget.initialName);
-  late final width = TextEditingController(text: widget.initialWidth.toString());
-  late final height = TextEditingController(text: widget.initialHeight.toString());
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Ajouter une pièce'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(controller: name, decoration: const InputDecoration(labelText: 'Nom')),
-          TextField(controller: width, keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Largeur (cm)')),
-          TextField(controller: height, keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Hauteur (cm)')),
-        ],
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuler')),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, {
-            'name': name.text.trim().isEmpty ? 'Pièce' : name.text.trim(),
-            'width': double.tryParse(width.text) ?? 0,
-            'height': double.tryParse(height.text) ?? 0,
-          }),
-          child: const Text('Ajouter'),
-        ),
-      ],
-    );
+class MarkerPainter extends CustomPainter {
+  final List<Piece> pieces; final List<Offset> current; final double scale; final bool drawing;
+  MarkerPainter(this.pieces,this.current,this.scale,this.drawing);
+  @override void paint(Canvas c,Size s){
+    final fill=Paint()..color=Colors.green.withOpacity(.18)..style=PaintingStyle.fill;
+    final line=Paint()..color=Colors.green.shade800..style=PaintingStyle.stroke..strokeWidth=1.5;
+    for(final p in pieces) drawPoly(c,p.points,fill,line);
+    if(drawing && current.isNotEmpty){
+      final orange=Paint()..color=Colors.orange..style=PaintingStyle.stroke..strokeWidth=2;
+      drawPoly(c,current,Paint()..color=Colors.orange.withOpacity(.12)..style=PaintingStyle.fill,orange);
+      for(final p in current)c.drawCircle(Offset(p.dx*scale,p.dy*scale),4,Paint()..color=Colors.orange);
+    }
   }
+  void drawPoly(Canvas c,List<Offset> pts,Paint fill,Paint line){
+    if(pts.isEmpty)return;
+    final path=Path()..moveTo(pts.first.dx*scale,pts.first.dy*scale);
+    for(final p in pts.skip(1))path.lineTo(p.dx*scale,p.dy*scale);
+    if(pts.length>=3)path.close();
+    c.drawPath(path,fill);c.drawPath(path,line);
+  }
+  @override bool shouldRepaint(covariant MarkerPainter old)=>true;
+}
+
+class PieceDialog extends StatefulWidget {
+  const PieceDialog({super.key});
+  @override State<PieceDialog> createState()=>_PieceDialogState();
+}
+class _PieceDialogState extends State<PieceDialog>{
+  final name=TextEditingController(text:'Pièce'), qty=TextEditingController(text:'1');
+  @override Widget build(BuildContext c)=>AlertDialog(
+    title:const Text('معلومات القطعة'),content:Column(mainAxisSize:MainAxisSize.min,children:[
+      TextField(controller:name,decoration:const InputDecoration(labelText:'اسم القطعة')),
+      TextField(controller:qty,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'الكمية')),
+    ]),actions:[
+      TextButton(onPressed:()=>Navigator.pop(c),child:const Text('إلغاء')),
+      FilledButton(onPressed:()=>Navigator.pop(c,{'name':name.text.trim().isEmpty?'Pièce':name.text.trim(),'quantity':int.tryParse(qty.text)??1}),child:const Text('حفظ'))
+    ]);
 }
