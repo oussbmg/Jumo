@@ -393,7 +393,7 @@ class MarkerPainter extends CustomPainter {
       c.drawPath(path,fill);
       final line=Paint()..style=PaintingStyle.stroke..strokeWidth=i==selected?3:1.5..color=i==selected?Colors.green:Colors.blue;
       c.drawPath(path,line);
-      final center=pts.reduce((a,b)=>a+b)/pts.length;
+      final center=pts.reduce((a,b)=>a+b)/pts.length.toDouble();
       final tp=TextPainter(text:TextSpan(text:pieces[i].name,style:const TextStyle(color:Colors.black,fontWeight:FontWeight.bold)),textDirection:TextDirection.ltr)..layout();
       tp.paint(c,center-Offset(tp.width/2,tp.height/2));
     }
