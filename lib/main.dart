@@ -289,11 +289,25 @@ class _MarkerPageState extends State<MarkerPage> {
                 onTapUp:(d)=>onCanvasTap(d.localPosition),
                 onPanUpdate:onPanUpdate,
                 onScaleUpdate:onScaleUpdate,
-                child: CustomPaint(
-                  painter: MarkerPainter(
-                    image: markerImage, pieces: pieces, drawing:drawing,
-                    selected:selected, size:canvasSize, transform:(p)=>transformed(pieces[p]),
-                  ),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (markerImage != null)
+                      Image.memory(
+                        markerImage!,
+                        fit: BoxFit.fill,
+                        gaplessPlayback: true,
+                      )
+                    else
+                      const ColoredBox(color: Colors.white),
+                    CustomPaint(
+                      painter: MarkerPainter(
+                        pieces: pieces, drawing: drawing,
+                        selected: selected, size: canvasSize,
+                        transform: (p) => transformed(pieces[p]),
+                      ),
+                    ),
+                  ],
                 ),
               );
             }),
@@ -362,24 +376,15 @@ class _MarkerPageState extends State<MarkerPage> {
 }
 
 class MarkerPainter extends CustomPainter {
-  final Uint8List? image;
   final List<Piece> pieces;
   final List<Offset> drawing;
   final int? selected;
   final Size size;
   final List<Offset> Function(int) transform;
-  MarkerPainter({required this.image,required this.pieces,required this.drawing,required this.selected,required this.size,required this.transform});
+  MarkerPainter({required this.pieces,required this.drawing,required this.selected,required this.size,required this.transform});
 
   @override
   void paint(Canvas c, Size s) {
-    final bg=Paint()..color=Colors.white;
-    c.drawRect(Offset.zero& s,bg);
-    if(image!=null){
-      try {
-        final img=MemoryImage(image!);
-        // Image widget is not available in CustomPainter synchronously; draw a light background instead.
-      } catch (_) {}
-    }
     final border=Paint()..style=PaintingStyle.stroke..strokeWidth=2..color=Colors.grey;
     c.drawRect(Offset.zero&s,border);
 
